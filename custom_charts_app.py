@@ -331,6 +331,9 @@ def main():
                 api_instance = games_api.GamesApi(api_client)
                 conf_games = api_instance.get_game_teams(season=season1, conference=team_conference)
                 
+                # Debug output
+                st.write(f"**Debug**: Conference = {team_conference}, Games returned = {len(conf_games) if isinstance(conf_games, list) else 'N/A'}")
+                
                 if isinstance(conf_games, list) and len(conf_games) > 0:
                     conf_data = []
                     for game in conf_games:
@@ -372,31 +375,42 @@ def main():
                                 'pace': game_dict.get('pace', 0)
                             }
                             conf_data.append(flat_game)
-                        except Exception:
+                        except Exception as e:
+                            st.write(f"**Debug**: Error processing game: {str(e)}")
                             continue
                     
                     df_conf = pd.DataFrame(conf_data)
+                    st.write(f"**Debug**: Conference DF created with {len(df_conf)} rows")
+                    st.write(f"**Debug**: Conference DF columns: {list(df_conf.columns)}")
+                    st.write(f"**Debug**: Selected metric: {selected_metric}, Available in conf data: {selected_metric in df_conf.columns}")
+                    
                     df_conf = df_conf.dropna(subset=['game_date'])
                     df_conf['point_diff'] = df_conf['points'] - df_conf['opponent_points']
                     df_conf = df_conf.sort_values('game_date')
                     
                     # Calculate conference average at each team game date
-                    conference_avg_values = []
-                    for team_date in df_games_analysis['game_date']:
-                        conf_up_to_date = df_conf[df_conf['game_date'] <= team_date]
-                        if len(conf_up_to_date) > 0 and selected_metric in df_conf.columns:
-                            avg = conf_up_to_date[selected_metric].mean()
-                            conference_avg_values.append(avg)
-                        else:
-                            conference_avg_values.append(None)
-                    
-                    conference_avg_series = pd.Series(conference_avg_values, index=df_games_analysis.index)
-                    overall_conf_avg = df_conf[selected_metric].mean() if selected_metric in df_conf.columns else 0
-                    st.success(f"✓ Loaded {len(df_conf)} conference games (Avg: {overall_conf_avg:.2f})")
+                    if selected_metric in df_conf.columns:
+                        conference_avg_values = []
+                        for team_date in df_games_analysis['game_date']:
+                            conf_up_to_date = df_conf[df_conf['game_date'] <= team_date]
+                            if len(conf_up_to_date) > 0:
+                                avg = conf_up_to_date[selected_metric].mean()
+                                conference_avg_values.append(avg)
+                            else:
+                                conference_avg_values.append(None)
+                        
+                        conference_avg_series = pd.Series(conference_avg_values, index=df_games_analysis.index)
+                        overall_conf_avg = df_conf[selected_metric].mean()
+                        st.success(f"✓ Loaded {len(df_conf)} conference games (Avg: {overall_conf_avg:.2f})")
+                        st.write(f"**Debug**: Conference avg series length: {len(conference_avg_series)}, null count: {conference_avg_series.isna().sum()}")
+                    else:
+                        st.warning(f"⚠️ Metric '{selected_metric}' not available in conference data. Available: {list(df_conf.columns)}")
                 else:
                     st.warning(f"No conference data available for {team_conference}")
             except Exception as e:
                 st.error(f"Could not fetch conference data: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
     
     # Trend Analysis
     if selected_metric in df_games_analysis.columns:
