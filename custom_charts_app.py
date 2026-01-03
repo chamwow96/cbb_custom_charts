@@ -231,11 +231,18 @@ def main():
         # Get team conference info
         team_conference = fetch_team_info(api_client, chart_team)
         
+        # Debug: Show what conference was detected
+        if team_conference:
+            st.caption(f"Conference: {team_conference}")
+        else:
+            st.caption("Conference: Not found")
+        
         # Conference comparison toggle
         show_conference_avg = st.checkbox(
             "Compare to Conference Avg",
             value=False,
-            help=f"Overlay {team_conference} average on chart" if team_conference else "Conference data not available"
+            help=f"Overlay {team_conference} average on chart" if team_conference else "Conference data not available",
+            disabled=(team_conference is None)
         )
     
     with col3:
@@ -324,6 +331,10 @@ def main():
     
     # Fetch conference average data if requested
     conference_avg_series = None
+    
+    # Debug checkpoint
+    st.write(f"**Debug Checkpoint**: show_conference_avg={show_conference_avg}, team_conference={team_conference}")
+    
     if show_conference_avg and team_conference:
         with st.spinner(f"Fetching {team_conference} conference data..."):
             try:
