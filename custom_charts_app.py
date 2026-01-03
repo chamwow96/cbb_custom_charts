@@ -19,7 +19,7 @@ st.set_page_config(
 # Import CBBD API
 try:
     import cbbd
-    from cbbd.api import games_api, stats_api, teams_api
+    from cbbd.api import games_api, stats_api
     from cbbd.configuration import Configuration
     from cbbd.api_client import ApiClient
 except ImportError:
@@ -78,23 +78,19 @@ def fetch_team_games(_api_client, team_name, season=2026):
 
 
 @st.cache_data(ttl=3600)
-def fetch_team_info(_api_client, team_name):
-    """Fetch team info to get conference"""
+def fetch_team_info(_api_client, team_name, season=2026):
+    """Fetch team conference from game data"""
     try:
-        api_instance = teams_api.TeamsApi(_api_client)
-        teams = api_instance.get_teams(team=team_name)
-        st.write(f"**Debug fetch_team_info**: team={team_name}, teams returned={len(teams) if teams else 0}")
-        if teams and len(teams) > 0:
-            team_info = teams[0].to_dict()
-            st.write(f"**Debug team_info keys**: {list(team_info.keys())}")
-            conference = team_info.get('conference')
-            st.write(f"**Debug conference value**: {conference}")
+        api_instance = games_api.GamesApi(_api_client)
+        # Fetch games to get conference info
+        games = api_instance.get_games(team=team_name, season=season)
+        if games and len(games) > 0:
+            first_game = games[0].to_dict()
+            conference = first_game.get('conference')
             return conference
         return None
     except Exception as e:
-        st.error(f"Error fetching team info: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc())
+        st.error(f"Error fetching team conference: {str(e)}")
         return None
 
 
@@ -236,7 +232,7 @@ def main():
     
     with col2:
         # Get team conference info
-        team_conference = fetch_team_info(api_client, chart_team)
+        team_conference = fetch_team_info(api_client, chart_team, season1)
         
         # Debug: Show what conference was detected
         if team_conference:
