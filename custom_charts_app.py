@@ -81,16 +81,18 @@ def fetch_team_games(_api_client, team_name, season=2026):
 def fetch_team_info(_api_client, team_name, season=2026):
     """Fetch team conference from game data"""
     try:
-        st.write(f"**Debug**: Fetching conference for team={team_name}, season={season}")
         api_instance = games_api.GamesApi(_api_client)
         # Fetch games to get conference info
         games = api_instance.get_games(team=team_name, season=season)
-        st.write(f"**Debug**: Games returned: {len(games) if games else 0}")
         if games and len(games) > 0:
             first_game = games[0].to_dict()
-            st.write(f"**Debug**: First game keys: {list(first_game.keys())}")
-            conference = first_game.get('conference')
-            st.write(f"**Debug**: Conference from game: {conference}")
+            # Check if team is home or away to get correct conference
+            if first_game.get('homeTeam') == team_name:
+                conference = first_game.get('homeConference')
+            elif first_game.get('awayTeam') == team_name:
+                conference = first_game.get('awayConference')
+            else:
+                conference = None
             return conference
         return None
     except Exception as e:
@@ -240,12 +242,6 @@ def main():
         # Get team conference info
         team_conference = fetch_team_info(api_client, chart_team, season1)
         
-        # Debug: Show what conference was detected
-        if team_conference:
-            st.caption(f"Conference: {team_conference}")
-        else:
-            st.caption("Conference: Not found")
-        
         # Conference comparison toggle
         show_conference_avg = st.checkbox(
             "Compare to Conference Avg",
@@ -253,6 +249,8 @@ def main():
             help=f"Overlay {team_conference} average on chart" if team_conference else "Conference data not available",
             disabled=(team_conference is None)
         )
+        if team_conference:
+            st.caption(f"Conference: {team_conference}")
     
     with col3:
         if chart_type == "Rolling Average":
@@ -340,19 +338,12 @@ def main():
     
     # Fetch conference average data if requested
     conference_avg_series = None
-    
-    # Debug checkpoint
-    st.write(f"**Debug Checkpoint**: show_conference_avg={show_conference_avg}, team_conference={team_conference}")
-    
     if show_conference_avg and team_conference:
         with st.spinner(f"Fetching {team_conference} conference data..."):
             try:
                 # Fetch all games for the conference
                 api_instance = games_api.GamesApi(api_client)
                 conf_games = api_instance.get_game_teams(season=season1, conference=team_conference)
-                
-                # Debug output
-                st.write(f"**Debug**: Conference = {team_conference}, Games returned = {len(conf_games) if isinstance(conf_games, list) else 'N/A'}")
                 
                 if isinstance(conf_games, list) and len(conf_games) > 0:
                     conf_data = []
@@ -395,15 +386,10 @@ def main():
                                 'pace': game_dict.get('pace', 0)
                             }
                             conf_data.append(flat_game)
-                        except Exception as e:
-                            st.write(f"**Debug**: Error processing game: {str(e)}")
+                        except Exception:
                             continue
                     
                     df_conf = pd.DataFrame(conf_data)
-                    st.write(f"**Debug**: Conference DF created with {len(df_conf)} rows")
-                    st.write(f"**Debug**: Conference DF columns: {list(df_conf.columns)}")
-                    st.write(f"**Debug**: Selected metric: {selected_metric}, Available in conf data: {selected_metric in df_conf.columns}")
-                    
                     df_conf = df_conf.dropna(subset=['game_date'])
                     df_conf['point_diff'] = df_conf['points'] - df_conf['opponent_points']
                     df_conf = df_conf.sort_values('game_date')
@@ -422,15 +408,12 @@ def main():
                         conference_avg_series = pd.Series(conference_avg_values, index=df_games_analysis.index)
                         overall_conf_avg = df_conf[selected_metric].mean()
                         st.success(f"✓ Loaded {len(df_conf)} conference games (Avg: {overall_conf_avg:.2f})")
-                        st.write(f"**Debug**: Conference avg series length: {len(conference_avg_series)}, null count: {conference_avg_series.isna().sum()}")
                     else:
-                        st.warning(f"⚠️ Metric '{selected_metric}' not available in conference data. Available: {list(df_conf.columns)}")
+                        st.warning(f"⚠️ Metric '{selected_metric}' not available in conference data")
                 else:
                     st.warning(f"No conference data available for {team_conference}")
             except Exception as e:
                 st.error(f"Could not fetch conference data: {str(e)}")
-                import traceback
-                st.code(traceback.format_exc())
     
     # Trend Analysis
     if selected_metric in df_games_analysis.columns:
