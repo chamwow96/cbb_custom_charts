@@ -83,11 +83,18 @@ def fetch_team_info(_api_client, team_name):
     try:
         api_instance = teams_api.TeamsApi(_api_client)
         teams = api_instance.get_teams(team=team_name)
+        st.write(f"**Debug fetch_team_info**: team={team_name}, teams returned={len(teams) if teams else 0}")
         if teams and len(teams) > 0:
             team_info = teams[0].to_dict()
-            return team_info.get('conference')
+            st.write(f"**Debug team_info keys**: {list(team_info.keys())}")
+            conference = team_info.get('conference')
+            st.write(f"**Debug conference value**: {conference}")
+            return conference
         return None
     except Exception as e:
+        st.error(f"Error fetching team info: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 
