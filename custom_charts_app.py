@@ -81,16 +81,22 @@ def fetch_team_games(_api_client, team_name, season=2026):
 def fetch_team_info(_api_client, team_name, season=2026):
     """Fetch team conference from game data"""
     try:
+        st.write(f"**Debug**: Fetching conference for team={team_name}, season={season}")
         api_instance = games_api.GamesApi(_api_client)
         # Fetch games to get conference info
         games = api_instance.get_games(team=team_name, season=season)
+        st.write(f"**Debug**: Games returned: {len(games) if games else 0}")
         if games and len(games) > 0:
             first_game = games[0].to_dict()
+            st.write(f"**Debug**: First game keys: {list(first_game.keys())}")
             conference = first_game.get('conference')
+            st.write(f"**Debug**: Conference from game: {conference}")
             return conference
         return None
     except Exception as e:
         st.error(f"Error fetching team conference: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 
