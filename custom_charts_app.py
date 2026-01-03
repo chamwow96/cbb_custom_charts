@@ -19,7 +19,7 @@ st.set_page_config(
 # Import CBBD API
 try:
     import cbbd
-    from cbbd.api import games_api, stats_api
+    from cbbd.api import games_api, stats_api, teams_api
     from cbbd.configuration import Configuration
     from cbbd.api_client import ApiClient
 except ImportError:
@@ -75,6 +75,20 @@ def fetch_team_games(_api_client, team_name, season=2026):
     except Exception as e:
         st.error(f"Error fetching games for {team_name}: {e}")
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def fetch_team_info(_api_client, team_name):
+    """Fetch team info to get conference"""
+    try:
+        api_instance = teams_api.TeamsApi(_api_client)
+        teams = api_instance.get_teams(team=team_name)
+        if teams and len(teams) > 0:
+            team_info = teams[0].to_dict()
+            return team_info.get('conference')
+        return None
+    except Exception as e:
+        return None
 
 
 @st.cache_data(ttl=3600)
@@ -201,8 +215,46 @@ def main():
     
     st.divider()
     
+    # Chart type and options
+    st.subheader("📈 Chart Configuration")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        chart_type = st.selectbox(
+            "Chart Type",
+            options=["Line Chart", "Rolling Average", "Bar Chart"],
+            index=0
+        )
+    
+    with col2:
+        # Get team conference info
+        team_conference = fetch_team_info(api_client, chart_team)
+        
+        # Conference comparison toggle
+        show_conference_avg = st.checkbox(
+            "Compare to Conference Avg",
+            value=False,
+            help=f"Overlay {team_conference} average on chart" if team_conference else "Conference data not available"
+        )
+    
+    with col3:
+        if chart_type == "Rolling Average":
+            rolling_window = st.number_input(
+                "Rolling Window (games)",
+                min_value=2,
+                max_value=10,
+                value=5,
+                step=1
+            )
+        else:
+            st.write("")  # Spacer
+    
+    with col4:
+        st.write("")  # Spacer
+    
     # Metric selection
-    st.subheader("📈 Select Metric to Chart")
+    st.subheader("📊 Select Metric")
     
     metric_options = {
         "Points Scored": "points",
@@ -270,6 +322,82 @@ def main():
         if selected_metric == "point_diff" and 'point_diff' not in df_games2_analysis.columns:
             df_games2_analysis['point_diff'] = df_games2_analysis['points'] - df_games2_analysis['opponent_points']
     
+    # Fetch conference average data if requested
+    conference_avg_series = None
+    if show_conference_avg and team_conference:
+        with st.spinner(f"Fetching {team_conference} conference data..."):
+            try:
+                # Fetch all games for the conference
+                api_instance = games_api.GamesApi(api_client)
+                conf_games = api_instance.get_game_teams(season=season1, conference=team_conference)
+                
+                if isinstance(conf_games, list) and len(conf_games) > 0:
+                    conf_data = []
+                    for game in conf_games:
+                        try:
+                            game_dict = game.to_dict()
+                            team_stats = game_dict.get('teamStats', {})
+                            opp_stats = game_dict.get('opponentStats', {})
+                            
+                            # Extract points
+                            points_data = team_stats.get('points', {})
+                            opp_points_data = opp_stats.get('points', {})
+                            fg_data = team_stats.get('fieldGoals', {})
+                            opp_fg_data = opp_stats.get('fieldGoals', {})
+                            three_pt_data = team_stats.get('threePointers', {})
+                            ft_data = team_stats.get('freeThrows', {})
+                            reb_data = team_stats.get('rebounds', {})
+                            
+                            # Helper function to safely extract values
+                            def safe_extract(value):
+                                if isinstance(value, dict):
+                                    return value.get('total', 0)
+                                return value if isinstance(value, (int, float)) else 0
+                            
+                            start_date = game_dict.get('startDate')
+                            flat_game = {
+                                'team': game_dict.get('team'),
+                                'game_date': pd.to_datetime(start_date, errors='coerce') if start_date else pd.NaT,
+                                'points': points_data.get('total', 0) if isinstance(points_data, dict) else 0,
+                                'opponent_points': opp_points_data.get('total', 0) if isinstance(opp_points_data, dict) else 0,
+                                'field_goal_pct': fg_data.get('pct', 0) if isinstance(fg_data, dict) else 0,
+                                'opponent_field_goal_pct': opp_fg_data.get('pct', 0) if isinstance(opp_fg_data, dict) else 0,
+                                'three_point_pct': three_pt_data.get('pct', 0) if isinstance(three_pt_data, dict) else 0,
+                                'free_throw_pct': ft_data.get('pct', 0) if isinstance(ft_data, dict) else 0,
+                                'rebounds': reb_data.get('total', 0) if isinstance(reb_data, dict) else 0,
+                                'assists': safe_extract(team_stats.get('assists', 0)),
+                                'turnovers': safe_extract(team_stats.get('turnovers', 0)),
+                                'steals': safe_extract(team_stats.get('steals', 0)),
+                                'blocks': safe_extract(team_stats.get('blocks', 0)),
+                                'pace': game_dict.get('pace', 0)
+                            }
+                            conf_data.append(flat_game)
+                        except Exception:
+                            continue
+                    
+                    df_conf = pd.DataFrame(conf_data)
+                    df_conf = df_conf.dropna(subset=['game_date'])
+                    df_conf['point_diff'] = df_conf['points'] - df_conf['opponent_points']
+                    df_conf = df_conf.sort_values('game_date')
+                    
+                    # Calculate conference average at each team game date
+                    conference_avg_values = []
+                    for team_date in df_games_analysis['game_date']:
+                        conf_up_to_date = df_conf[df_conf['game_date'] <= team_date]
+                        if len(conf_up_to_date) > 0 and selected_metric in df_conf.columns:
+                            avg = conf_up_to_date[selected_metric].mean()
+                            conference_avg_values.append(avg)
+                        else:
+                            conference_avg_values.append(None)
+                    
+                    conference_avg_series = pd.Series(conference_avg_values, index=df_games_analysis.index)
+                    overall_conf_avg = df_conf[selected_metric].mean() if selected_metric in df_conf.columns else 0
+                    st.success(f"✓ Loaded {len(df_conf)} conference games (Avg: {overall_conf_avg:.2f})")
+                else:
+                    st.warning(f"No conference data available for {team_conference}")
+            except Exception as e:
+                st.error(f"Could not fetch conference data: {str(e)}")
+    
     # Trend Analysis
     if selected_metric in df_games_analysis.columns:
         st.write("**📈 Trend Analysis**")
@@ -329,32 +457,133 @@ def main():
     
     fig = go.Figure()
     
-    # Add Team 1
-    fig.add_trace(go.Scatter(
-        x=list(range(1, len(df_games_analysis) + 1)),
-        y=df_games_analysis[selected_metric],
-        mode='lines+markers',
-        name=chart_team,
-        line=dict(width=2),
-        marker=dict(size=8),
-        hovertemplate=f"<b>{chart_team}</b><br>Game: %{{x}}<br>{selected_metric_label}: %{{y:.2f}}<extra></extra>"
-    ))
-    
-    # Add Team 2 if available
-    if df_games2_analysis is not None and selected_metric in df_games2_analysis.columns:
+    if chart_type == "Line Chart":
+        # Standard line chart
         fig.add_trace(go.Scatter(
-            x=list(range(1, len(df_games2_analysis) + 1)),
-            y=df_games2_analysis[selected_metric],
+            x=list(range(1, len(df_games_analysis) + 1)),
+            y=df_games_analysis[selected_metric],
             mode='lines+markers',
-            name=chart_team2,
-            line=dict(width=2, dash='dash'),
-            marker=dict(size=8, symbol='diamond'),
-            hovertemplate=f"<b>{chart_team2}</b><br>Game: %{{x}}<br>{selected_metric_label}: %{{y:.2f}}<extra></extra>"
+            name=chart_team,
+            line=dict(width=2, color='#1f77b4'),
+            marker=dict(size=8),
+            hovertemplate=f"<b>{chart_team}</b><br>Game: %{{x}}<br>{selected_metric_label}: %{{y:.2f}}<extra></extra>"
         ))
+        
+        if df_games2_analysis is not None and selected_metric in df_games2_analysis.columns:
+            fig.add_trace(go.Scatter(
+                x=list(range(1, len(df_games2_analysis) + 1)),
+                y=df_games2_analysis[selected_metric],
+                mode='lines+markers',
+                name=chart_team2,
+                line=dict(width=2, dash='dash', color='#ff7f0e'),
+                marker=dict(size=8, symbol='diamond'),
+                hovertemplate=f"<b>{chart_team2}</b><br>Game: %{{x}}<br>{selected_metric_label}: %{{y:.2f}}<extra></extra>"
+            ))
+        
+        # Add conference average
+        if conference_avg_series is not None:
+            fig.add_trace(go.Scatter(
+                x=list(range(1, len(df_games_analysis) + 1)),
+                y=conference_avg_series,
+                mode='lines',
+                name=f'{team_conference} Avg',
+                line=dict(color='red', width=2, dash='dash'),
+                opacity=0.7
+            ))
+    
+    elif chart_type == "Rolling Average":
+        # Calculate rolling averages
+        df_games_analysis[f'{selected_metric}_rolling'] = df_games_analysis[selected_metric].rolling(
+            window=rolling_window,
+            min_periods=1
+        ).mean()
+        
+        # Plot actual values as markers
+        fig.add_trace(go.Scatter(
+            x=list(range(1, len(df_games_analysis) + 1)),
+            y=df_games_analysis[selected_metric],
+            mode='markers',
+            name=f'{chart_team} Actual',
+            marker=dict(size=6, color='lightblue', opacity=0.5)
+        ))
+        
+        # Plot rolling average
+        fig.add_trace(go.Scatter(
+            x=list(range(1, len(df_games_analysis) + 1)),
+            y=df_games_analysis[f'{selected_metric}_rolling'],
+            mode='lines',
+            name=f'{chart_team} {rolling_window}-Game Avg',
+            line=dict(color='#1f77b4', width=3)
+        ))
+        
+        # Add second team if provided
+        if df_games2_analysis is not None and selected_metric in df_games2_analysis.columns:
+            df_games2_analysis[f'{selected_metric}_rolling'] = df_games2_analysis[selected_metric].rolling(
+                window=rolling_window,
+                min_periods=1
+            ).mean()
+            
+            fig.add_trace(go.Scatter(
+                x=list(range(1, len(df_games2_analysis) + 1)),
+                y=df_games2_analysis[selected_metric],
+                mode='markers',
+                name=f'{chart_team2} Actual',
+                marker=dict(size=6, color='#ffcc99', opacity=0.5)
+            ))
+            
+            fig.add_trace(go.Scatter(
+                x=list(range(1, len(df_games2_analysis) + 1)),
+                y=df_games2_analysis[f'{selected_metric}_rolling'],
+                mode='lines',
+                name=f'{chart_team2} {rolling_window}-Game Avg',
+                line=dict(color='#ff7f0e', width=3)
+            ))
+        
+        # Add conference average
+        if conference_avg_series is not None:
+            fig.add_trace(go.Scatter(
+                x=list(range(1, len(df_games_analysis) + 1)),
+                y=conference_avg_series,
+                mode='lines',
+                name=f'{team_conference} Avg',
+                line=dict(color='red', width=2, dash='dash'),
+                opacity=0.7
+            ))
+    
+    elif chart_type == "Bar Chart":
+        # Bar chart
+        fig.add_trace(go.Bar(
+            x=list(range(1, len(df_games_analysis) + 1)),
+            y=df_games_analysis[selected_metric],
+            name=chart_team,
+            marker=dict(color='#2ca02c'),
+            opacity=0.8
+        ))
+        
+        if df_games2_analysis is not None and selected_metric in df_games2_analysis.columns:
+            fig.add_trace(go.Bar(
+                x=list(range(1, len(df_games2_analysis) + 1)),
+                y=df_games2_analysis[selected_metric],
+                name=chart_team2,
+                marker=dict(color='#d62728'),
+                opacity=0.8
+            ))
+        
+        # Add conference average
+        if conference_avg_series is not None:
+            fig.add_trace(go.Scatter(
+                x=list(range(1, len(df_games_analysis) + 1)),
+                y=conference_avg_series,
+                mode='lines',
+                name=f'{team_conference} Avg',
+                line=dict(color='red', width=3, dash='dash'),
+                opacity=0.8
+            ))
     
     # Update layout
+    title_suffix = f" vs {team_conference} Avg" if conference_avg_series is not None else ""
     fig.update_layout(
-        title=f"{selected_metric_label} Over Time ({situation_filter})",
+        title=f"{selected_metric_label} Over Time ({situation_filter}){title_suffix}",
         xaxis_title="Game Number",
         yaxis_title=selected_metric_label,
         hovermode='x unified',
